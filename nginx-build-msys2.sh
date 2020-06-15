@@ -8,6 +8,14 @@ do
       NGINX_TAG="${i#*=}"
       shift # past argument=value
     ;;
+    -nt=*|--njs-tag=*)
+      NJS_TAG="${i#*=}"
+      shift # past argument=value
+    ;;
+    --debug)
+      NGINX_DEBUG=1
+      shift # past argument=value
+    ;;
   esac
 done
 
@@ -38,6 +46,11 @@ OPENSSL="$(curl -s 'https://www.openssl.org/source/' | grep -ioP 'openssl-1\.(\d
 OPENSSL="${OPENSSL:-openssl-1.1.1g}"
 echo $OPENSSL
 
+# NJS does not inherit nginx's --with-pcre
+# And for some reason, nginx doesn't seem to pick up the locally installed pcre, so both are required
+echo "Installing PCRE"
+pacman -U --noconfirm http://repo.msys2.org/mingw/x86_64/mingw-w64-x86_64-pcre-8.44-1-any.pkg.tar.xz || { echo "Couldn't install PCRE"; exit 1; }
+
 # clone and patch nginx
 if [[ -d nginx ]]; then
     cd nginx
@@ -51,22 +64,39 @@ if [[ -d nginx ]]; then
     fi
 else
     if [[ "${NGINX_TAG}" == "" ]]; then
-        git clone https://github.com/nginx/nginx.git --depth=1
+        git clone https://github.com/nginx/nginx.git --depth=1 || { echo "Couldn't clone nginx"; exit 1; }
     else
-        git clone https://github.com/nginx/nginx.git --depth=1 --branch "${NGINX_TAG}"
+        git clone https://github.com/nginx/nginx.git --depth=1 --branch "${NGINX_TAG}" || { echo "Couldn't clone nginx"; exit 1; }
     fi
     cd nginx
 fi
 git checkout -b patch
 git am -3 ../nginx-*.patch
 
+# clone njs
+if [[ -d njs ]]; then
+    pushd njs
+    git checkout master
+    if [[ "${NJS_TAG}" == "" ]]; then
+        git reset --hard origin || git reset --hard
+        git pull
+    else
+        git reset --hard "${NJS_TAG}" || git reset --hard
+    fi
+    popd
+else
+    if [[ "${NJS_TAG}" == "" ]]; then
+        git clone https://github.com/nginx/njs.git --depth=1 || { echo "Couldn't clone njs"; exit 1; }
+    else
+        git clone https://github.com/nginx/njs.git --depth=1 --branch "${NJS_TAG}" || { echo "Couldn't clone njs"; exit 1; }
+    fi
+fi
+
 # download deps
 wget -c -nv "https://zlib.net/${ZLIB}.tar.xz" || \
-  wget -c -nv "http://prdownloads.sourceforge.net/libpng/${ZLIB}.tar.xz"
+  wget -c -nv "http://prdownloads.sourceforge.net/libpng/${ZLIB}.tar.xz" || { echo "Couldn't download zlib"; exit 1; }
 tar -xf "${ZLIB}.tar.xz"
-wget -c -nv "https://ftp.pcre.org/pub/pcre/${PCRE}.tar.bz2"
-tar -xf "${PCRE}.tar.bz2"
-wget -c -nv "https://www.openssl.org/source/${OPENSSL}.tar.gz"
+wget -c -nv "https://www.openssl.org/source/${OPENSSL}.tar.gz" || { echo "Couldn't download openssl"; exit 1; }
 tar -xf "${OPENSSL}.tar.gz"
 
 # dirty workaround for openssl-1.1.1d
@@ -82,64 +112,48 @@ mv -f tmp/*/CHANGES* ../docs/
 cp -f docs/text/LICENSE ../docs/
 cp -f docs/text/README ../docs/
 cp -pf "${OPENSSL}/LICENSE" '../docs/OpenSSL.LICENSE'
-cp -pf "${PCRE}/LICENCE" '../docs/PCRE.LICENCE'
 sed -ne '/^ (C) 1995-20/,/^  jloup@gzip\.org/p' "${ZLIB}/README" > '../docs/zlib.LICENSE'
 touch -r "${ZLIB}/README" '../docs/zlib.LICENSE'
 
 # configure
 configure_args=(
-    --sbin-path=nginx.exe \
-    --http-client-body-temp-path=temp/client_body \
-    --http-proxy-temp-path=temp/proxy \
-    --http-fastcgi-temp-path=temp/fastcgi \
-    --http-scgi-temp-path=temp/scgi \
-    --http-uwsgi-temp-path=temp/uwsgi \
-    --with-http_v2_module \
-    --with-http_realip_module \
-    --with-http_addition_module \
-    --with-http_sub_module \
-    --with-http_dav_module \
-    --with-http_stub_status_module \
-    --with-http_flv_module \
-    --with-http_mp4_module \
-    --with-http_gunzip_module \
-    --with-http_gzip_static_module \
-    --with-http_auth_request_module \
-    --with-http_random_index_module \
-    --with-http_secure_link_module \
-    --with-http_slice_module \
-    --with-mail \
-    --with-stream \
-    --with-pcre=${PCRE} \
-    --with-pcre-jit \
-    --with-zlib=${ZLIB} \
-    --with-openssl=${OPENSSL} \
-    --with-http_ssl_module \
-    --with-mail_ssl_module \
-    --with-stream_ssl_module \
-    --with-ld-opt="-Wl,--gc-sections,--build-id=none" \
-    --prefix=
+    '--sbin-path=nginx.exe' \
+    '--http-client-body-temp-path=temp/client_body' \
+    '--http-proxy-temp-path=temp/proxy' \
+    '--http-fastcgi-temp-path=temp/fastcgi' \
+    '--http-scgi-temp-path=temp/scgi' \
+    '--http-uwsgi-temp-path=temp/uwsgi' \
+    "--with-pcre=${PCRE}" \
+    "--with-zlib=${ZLIB}" \
+    "--with-openssl=${OPENSSL}" \
+    '--with-openssl-opt=no-asm' \
+    '--with-http_ssl_module' \
+    '--prefix='
 )
 echo ${configure_args[@]}
 auto/configure ${configure_args[@]} \
     --with-cc-opt='-s -O2 -fno-strict-aliasing -pipe' \
-    --with-openssl-opt='no-tests -D_WIN32_WINNT=0x0501'
+    --with-openssl-opt='no-tests -D_WIN32_WINNT=0x0501' \
+     || { echo "Couldn't configure nginx"; exit 1; }
 
 # build
-make -j$(nproc)
-strip -s objs/nginx.exe
+make -j$(nproc) || { echo "Couldn't compile nginx"; exit 1; }
+strip -s objs/nginx.exe || { echo "Couldn't strip nginx.exe"; exit 1; }
 version="$(cat src/core/nginx.h | grep NGINX_VERSION | grep -ioP '((\d+\.)+\d+)')"
 mv -f "objs/nginx.exe" "../nginx-${version}-${machine_str}.exe"
 
-# re-configure with debugging log
-configure_args+=(--with-debug)
-auto/configure ${configure_args[@]}  \
-    --with-cc-opt='-O2 -fno-strict-aliasing -pipe' \
-    --with-openssl-opt='no-tests -D_WIN32_WINNT=0x0501'
+if [ -z ${NGINX_DEBUG+} ]; then
+  # re-configure with debugging log
+  configure_args+=(--with-debug)
+  auto/configure ${configure_args[@]}  \
+      --with-cc-opt='-O2 -fno-strict-aliasing -pipe' \
+      --with-openssl-opt='no-tests -D_WIN32_WINNT=0x0501' \
+       || { echo "Couldn't configure nginx-debug"; exit 1; }
 
-# re-build with debugging log
-make -j$(nproc)
-mv -f "objs/nginx.exe" "../nginx-${version}-${machine_str}-debug.exe"
+  # re-build with debugging log
+  make -j$(nproc)|| { echo "Couldn't compile nginx-debug"; exit 1; }
+  mv -f "objs/nginx.exe" "../nginx-${version}-${machine_str}-debug.exe"
+fi
 
 # clean up
 git checkout master
