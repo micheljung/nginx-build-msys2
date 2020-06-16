@@ -73,24 +73,6 @@ fi
 git checkout -b patch
 git am -3 ../nginx-*.patch
 
-# clone njs
-if [[ -d njs ]]; then
-    pushd njs
-    git checkout master
-    if [[ "${NJS_TAG}" == "" ]]; then
-        git reset --hard origin || git reset --hard
-        git pull
-    else
-        git reset --hard "${NJS_TAG}" || git reset --hard
-    fi
-    popd
-else
-    if [[ "${NJS_TAG}" == "" ]]; then
-        git clone https://github.com/nginx/njs.git --depth=1 || { echo "Couldn't clone njs"; exit 1; }
-    else
-        git clone https://github.com/nginx/njs.git --depth=1 --branch "${NJS_TAG}" || { echo "Couldn't clone njs"; exit 1; }
-    fi
-fi
 
 # download deps
 wget -c -nv "https://zlib.net/${ZLIB}.tar.xz" || \
