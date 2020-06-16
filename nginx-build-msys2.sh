@@ -126,7 +126,6 @@ configure_args=(
     "--with-pcre=${PCRE}" \
     "--with-zlib=${ZLIB}" \
     "--with-openssl=${OPENSSL}" \
-    '--with-openssl-opt=no-asm' \
     '--with-http_ssl_module' \
     '--prefix='
 )
