@@ -132,6 +132,7 @@ configure_args=(
     --with-openssl=${OPENSSL} \
     --with-http_ssl_module \
     --with-ld-opt="-Wl,--gc-sections,--build-id=none" \
+    --add-module=njs/nginx \
     --prefix=
 )
 echo ${configure_args[@]}
